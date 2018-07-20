@@ -21,7 +21,7 @@ library
   -- other-modules:       
   other-extensions:    RecordWildCards
   build-depends:       base ==4.*, bytestring, containers, split
-
+  ghc-options:         -Wall
   -- hs-source-dirs:      
   default-language:    Haskell2010
 

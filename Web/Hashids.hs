@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE ViewPatterns #-}
 
 -- | This is a Haskell port of Ivan Akimov's Hashids library. This is /not/ 
 --   a cryptographic hashing algorithm. Hashids is typically used to encode 
@@ -66,6 +67,7 @@ import Numeric                           ( showHex, readHex )
 import qualified Data.ByteString         as BS
 import qualified Data.ByteString.Char8   as C8
 import qualified Data.Sequence           as Seq
+import qualified Data.List.NonEmpty      as NE
 
 -- $howto
 --
@@ -295,9 +297,10 @@ hashidsMinimum salt minimum = createHashidsContext salt minimum defaultAlphabet
 --
 decodeHex :: HashidsContext     -- ^ A Hashids context object
           -> ByteString         -- ^ Hash
-          -> String
-decodeHex context hash = concatMap (drop 1 . flip showHex "") numbers
+          -> Maybe String
+decodeHex context hash = numbers >>= Just . concatMap (drop 1 . flip showHex "") . toList
   where
+    numbers :: Maybe (NE.NonEmpty Int)
     numbers = decode context hash
 
 -- | Encode a hexadecimal number.
@@ -308,10 +311,15 @@ decodeHex context hash = concatMap (drop 1 . flip showHex "") numbers
 --
 encodeHex :: HashidsContext     -- ^ A Hashids context object
           -> String             -- ^ Hexadecimal number represented as a string
-          -> ByteString
+          -> Maybe ByteString
 encodeHex context str
-    | not (all hexChar str) = ""
-    | otherwise = encodeList context $ map go $ chunksOf 12 str
+    | not (all hexChar str) = Just ""
+    | otherwise = case Seq.viewl $ Seq.fromList $ chunksOf 12 str of
+      Seq.EmptyL ->
+        Nothing
+      x Seq.:< (toList -> xs) ->
+        Just $ encodeList context $ NE.map go $ (x NE.:| xs)
+      
   where
     go str = let [(a,_)] = readHex ('1':str) in a
     hexChar c = c `elem` ("0123456789abcdefABCDEF" :: String)
@@ -325,16 +333,18 @@ encodeHex context str
 --
 decode :: HashidsContext     -- ^ A Hashids context object
        -> ByteString         -- ^ Hash
-       -> [Int]
+       -> Maybe (NE.NonEmpty Int)
 decode ctx@Context{..} hash
-    | BS.null hash = []
-    | encodeList ctx res /= hash = []
+    | BS.null hash = Nothing
+    | (encodeList ctx <$> res) /= Just hash = Nothing
     | otherwise = res
   where
+    res :: Maybe (NE.NonEmpty Int)
     res = splitOn seps tail
             |> foldl' go ([], alphabet)
             |> fst
             |> reverse
+            |> NE.nonEmpty
 
     hashArray = splitOn guards hash
     alphabetLength = BS.length alphabet
@@ -366,7 +376,7 @@ numbersHashInt xs = foldr ((+) . uncurry mod) 0 $ zip xs [100 .. ]
 encode :: HashidsContext        -- ^ A Hashids context object
        -> Int                   -- ^ Number to encode
        -> ByteString
-encode context n = encodeList context [n]
+encode context n = encodeList context (n NE.:| [])
 
 -- | Encode a list of numbers.
 --
@@ -376,10 +386,9 @@ encode context n = encodeList context [n]
 -- >     hash = encodeList context [2, 3, 5, 7, 11]          -- == "EOurh6cbTD"
 --
 encodeList :: HashidsContext    -- ^ A Hashids context object
-           -> [Int]             -- ^ List of numbers
+           -> NE.NonEmpty Int             -- ^ List of numbers
            -> ByteString
-encodeList _ [] = error "encodeList: empty list"
-encodeList Context{..} numbers =
+encodeList Context{..} (NE.toList -> numbers) =
     res |> expand False |> BS.reverse
         |> expand True  |> BS.reverse
         |> expand' alphabet'
@@ -483,7 +492,7 @@ encodeUsingSalt = encode . hashidsSimple
 --   If the same context is used repeatedly, use 'encodeList' with one of the
 --   constructors instead.
 encodeListUsingSalt :: ByteString -- ^ Salt
-                    -> [Int]      -- ^ Numbers
+                    -> NE.NonEmpty Int      -- ^ Numbers
                     -> ByteString
 encodeListUsingSalt = encodeList . hashidsSimple
 
@@ -494,17 +503,17 @@ encodeListUsingSalt = encodeList . hashidsSimple
 --   constructors instead.
 decodeUsingSalt :: ByteString     -- ^ Salt
                 -> ByteString     -- ^ Hash
-                -> [Int]
+                -> Maybe (NE.NonEmpty Int)
 decodeUsingSalt = decode . hashidsSimple
 
 -- | Shortcut for 'encodeHex'.
 encodeHexUsingSalt :: ByteString  -- ^ Salt
                    -> String      -- ^ Hexadecimal number represented as a string
-                   -> ByteString
+                   -> Maybe ByteString
 encodeHexUsingSalt = encodeHex . hashidsSimple
 
 -- | Shortcut for 'decodeHex'.
 decodeHexUsingSalt :: ByteString  -- ^ Salt
                    -> ByteString  -- ^ Hash
-                   -> String
+                   -> Maybe String
 decodeHexUsingSalt = decodeHex . hashidsSimple
